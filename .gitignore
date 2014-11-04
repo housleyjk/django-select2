@@ -9,5 +9,8 @@ dist
 build
 
 docs/_build
-.project
-.pydevproject
+
+# Intellij
+.idea/
+*.iml
+*.iws

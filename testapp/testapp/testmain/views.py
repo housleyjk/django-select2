@@ -2,7 +2,8 @@ from django.core.urlresolvers import reverse
 from django.http import HttpResponseRedirect
 from django.shortcuts import render, get_object_or_404
 
-from .forms import EmployeeForm, DeptForm, MixedForm, InitialValueForm, QuestionForm, WordsForm, SchoolForm
+from .forms import EmployeeForm, DeptForm, MixedForm, InitialValueForm, QuestionForm, WordsForm, SchoolForm, GetSearchTestForm, \
+    AnotherWordForm
 from .models import Employee, Dept, Question, WordList, School
 
 def test_single_value_model_field(request):
@@ -108,4 +109,36 @@ def test_auto_heavy_perf(request):
             return HttpResponseRedirect(reverse('home'))
     else:
         form = WordsForm(instance=word)
+    return render(request, 'form.html', {'form': form})
+
+def test_get_search_form(request):
+    """
+    Test a search form using GET. Issue#66
+    """
+    if request.GET:
+        form = GetSearchTestForm(request.GET)
+        if form.is_valid():
+            results = Employee.objects.all()
+            if form.cleaned_data['name'] != []:
+                results = results.filter(name__in = form.cleaned_data['name'])
+            if form.cleaned_data['dept'] != []:
+                results = results.filter(dept__in = form.cleaned_data['dept'])
+    else:
+        form = GetSearchTestForm()
+        results = Employee.objects.none()
+    return render(request, 'formget.html', {'form': form, 'results' : results})
+
+def test_issue_73(request):
+    try:
+        word = WordList.objects.get(kind='Word_Of_Day')
+    except WordList.DoesNotExist:
+        word = WordList(kind='Word_Of_Day')
+        
+    if request.POST:
+        form = AnotherWordForm(request.POST)
+        if form.is_valid():
+            form.save()
+            return HttpResponseRedirect(reverse('home'))
+    else:
+        form = AnotherWordForm(instance=word)
     return render(request, 'form.html', {'form': form})

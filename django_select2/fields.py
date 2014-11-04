@@ -65,7 +65,7 @@ class AutoViewFieldMixin(object):
         :rtype: :py:obj:`bool`
 
         .. warning:: Sub-classes should override this. You really do not want random people making
-            Http reqeusts to your server, be able to get access to sensitive information.
+            Http requests to your server, be able to get access to sensitive information.
         """
         return True
 
@@ -120,7 +120,7 @@ class ModelResultJsonMixin(object):
     It is expected that sub-classes will defined a class field variable
     ``search_fields``, which should be a list of field names to search for.
 
-    ..note:: As of version 3.1.3, ``search_fields`` is optional if sub-class
+    .. note:: As of version 3.1.3, ``search_fields`` is optional if sub-class
         overrides ``get_results``.
     """
 
@@ -128,7 +128,7 @@ class ModelResultJsonMixin(object):
         """
         Class constructor.
 
-        :param queryset: This can be passed as kwarg here or defined as field variabel,
+        :param queryset: This can be passed as kwarg here or defined as field variable,
             like ``search_fields``.
         :type queryset: :py:class:`django.db.models.query.QuerySet` or None
 
@@ -147,11 +147,11 @@ class ModelResultJsonMixin(object):
     def get_queryset(self):
         """
         Returns the queryset.
-        
+
         The default implementation returns the ``self.queryset``, which is usually the
         one set by sub-classes at class-level. However, if that is ``None``
         then ``ValueError`` is thrown.
-        
+
         :return: queryset
         :rtype: :py:class:`django.db.models.query.QuerySet`
         """
@@ -175,7 +175,7 @@ class ModelResultJsonMixin(object):
     def extra_data_from_instance(self, obj):
         """
         Sub-classes should override this to generate extra data for values. These are passed to
-        Javascript and can be used for custom rendering.
+        JavaScript and can be used for custom rendering.
 
         :param obj: The model object.
         :type obj: :py:class:`django.model.Model`
@@ -265,12 +265,12 @@ class ModelResultJsonMixin(object):
         if self.max_results:
             min_ = (page - 1) * self.max_results
             max_ = min_ + self.max_results + 1  # fetching one extra row to check if it has more rows.
-            res = list(qs.filter(*params['or'], **params['and'])[min_:max_])
+            res = list(qs.filter(*params['or'], **params['and']).distinct()[min_:max_])
             has_more = len(res) == (max_ - min_)
             if has_more:
                 res = res[:-1]
         else:
-            res = list(qs.filter(*params['or'], **params['and']))
+            res = list(qs.filter(*params['or'], **params['and']).distinct())
             has_more = False
 
         res = [(getattr(obj, self.to_field_name), self.label_from_instance(obj), self.extra_data_from_instance(obj))
@@ -302,7 +302,7 @@ class UnhideableQuerysetType(type):
 
     def __call__(cls, *args, **kwargs):
         queryset = kwargs.get('queryset', None)
-        if not queryset and hasattr(cls, '_subclass_queryset'):
+        if queryset is None and hasattr(cls, '_subclass_queryset'):
             kwargs['queryset'] = getattr(cls, '_subclass_queryset')
         return type.__call__(cls, *args, **kwargs)
 
@@ -492,6 +492,7 @@ class HeavySelect2FieldBaseMixin(object):
         # could have directly set field_id on it.
         if hasattr(self, 'field_id'):
             self.widget.field_id = self.field_id
+            self.widget.attrs['data-select2-id'] = self.field_id
 
         # Widget should have been instantiated by now.
         self.widget.field = self
@@ -551,7 +552,7 @@ class HeavyChoiceField(ChoiceMixin, forms.Field):
         """
         Coerces ``value`` to a Python data type.
 
-        Sub-classes should override this if they do not want unicode values.
+        Sub-classes should override this if they do not want Unicode values.
         """
         return smart_text(value)
 
@@ -758,7 +759,7 @@ class HeavyModelSelect2TagField(HeavySelect2FieldBaseMixin, ModelMultipleChoiceF
     def get_model_field_values(self, value):
         """
         This is called when the input value is not valid and the field
-        tries to create a new model instance. 
+        tries to create a new model instance.
 
         :param value: Invalid value entered by the user.
         :type value: unicode
@@ -840,7 +841,7 @@ class AutoModelSelect2TagField(ModelResultJsonMixin, AutoViewFieldMixin, HeavyMo
     .. warning:: :py:exc:`NotImplementedError` would be thrown if :py:meth:`get_model_field_values` is not implemented.
 
     Example::
-    
+
         class Tag(models.Model):
             tag = models.CharField(max_length=10, unique=True)
             def __unicode__(self):

@@ -1,19 +1,18 @@
 """
 Contains all the Django widgets for Select2.
 """
-
+import json
 import logging
 from itertools import chain
-from . import util
+import re
+import util
 
 from django import forms
-from django.utils.encoding import force_text
+from django.core.validators import EMPTY_VALUES
+from django.utils.encoding import force_unicode
 from django.utils.safestring import mark_safe
 from django.core.urlresolvers import reverse
 from django.utils.datastructures import MultiValueDict, MergeDict
-
-from .util import render_js_script, convert_to_js_string_arr, JSVar, JSFunction, JSFunctionInContext, \
-    convert_dict_to_js_map, convert_to_js_arr
 
 from . import __RENDER_SELECT2_STATICS as RENDER_SELECT2_STATICS
 
@@ -38,16 +37,29 @@ def get_select2_heavy_js_libs():
 
 def get_select2_css_libs(light=False):
     from django.conf import settings
-    if settings.configured and settings.DEBUG:
-        if light:
-            return ('css/select2.css',)
+    from . import __BOOTSTRAP
+    if __BOOTSTRAP:
+        if settings.configured and settings.DEBUG:
+            if light:
+                return ('css/select2.css', 'css/select2-bootstrap.css')
+            else:
+                return ('css/select2.css', 'css/extra.css', 'css/select2-bootstrap.css')
         else:
-            return ('css/select2.css', 'css/extra.css', )
+            if light:
+                return ('css/select2-bootstrapped.min.css',)
+            else:
+                return ('css/all-bootstrapped.min.css',)
     else:
-        if light:
-            return ('css/select2.min.css',)
+        if settings.configured and settings.DEBUG:
+            if light:
+                return ('css/select2.css',)
+            else:
+                return ('css/select2.css', 'css/extra.css')
         else:
-            return ('css/all.min.css', )
+            if light:
+                return ('css/select2.min.css',)
+            else:
+                return ('css/all.min.css',)
 
 ### Light mixin and widgets ###
 
@@ -55,10 +67,10 @@ class Select2Mixin(object):
     """
     The base mixin of all Select2 widgets.
 
-    This mixin is responsible for rendering the necessary Javascript and CSS codes which turns normal ``<select>``
+    This mixin is responsible for rendering the necessary JavaScript and CSS codes which turns normal ``<select>``
     markups into Select2 choice list.
 
-    The following Select2 otions are added by this mixin:-
+    The following Select2 options are added by this mixin:-
 
         * minimumResultsForSearch: ``6``
         * placeholder: ``''``
@@ -79,7 +91,7 @@ class Select2Mixin(object):
     }
     """
     The options listed here are rendered as JS map and passed to Select2 JS code.
-    Complete description of theses options are available in Select2_ JS' site.
+    Complete description of these options are available in Select2_ JS' site.
 
     .. _Select2: http://ivaynberg.github.com/select2/#documentation.
     """
@@ -105,14 +117,20 @@ class Select2Mixin(object):
                                 })
                         }
 
-            .. tip:: You cannot introduce new options using this. For that you should sub-class and overried
+            .. tip:: You cannot introduce new options using this. For that you should sub-class and override
                 :py:meth:`.init_options`. The reason for this is, few options are not compatible with each other
                 or are not applicable in some scenarios. For example, when Select2 is attached to ``<select>`` tag,
                 it can get if it is multiple or single valued from that tag itself. In this case if you specify
                 ``multiple`` option then not only it is useless but an error in Select2 JS' point of view.
 
                 There are other such intricacies, based on which some options are removed. By enforcing this
-                restriction we make sure to not break the code by passing some wrong concotion of options.
+                restriction we make sure to not break the code by passing some wrong concoction of options.
+
+            .. tip:: According to the select2 documentation, in order to get the ``placeholder`` and ``allowClear``
+                settings working, you have to specify an empty ``<option></option>`` as the first entry in your
+                ``<select>`` list. Otherwise the field will be rendered without a placeholder and the clear feature
+                will stay disabled.
+
 
         :type select2_options: :py:obj:`dict` or None
 
@@ -121,7 +139,7 @@ class Select2Mixin(object):
         self.options = dict(self.options)
         select2_options = kwargs.pop('select2_options', None)
         if select2_options:
-            for name, value in list(select2_options.items()):
+            for name, value in select2_options.items():
                 self.options[name] = value
         self.init_options()
 
@@ -134,14 +152,10 @@ class Select2Mixin(object):
         Example::
 
             def init_options(self):
-                self.options['createSearchChoice'] = JSFunction('Your_js_function')
+                self.options['createSearchChoice'] = 'Your_js_function'
 
         In the above example we are setting ``Your_js_function`` as Select2's ``createSearchChoice``
         function.
-
-        .. tip:: If you want to run ``Your_js_function`` in the context of the Select2 DOM element,
-            i.e. ``this`` inside your JS function should point to the component instead of ``window``, then
-            use :py:class:`~.util.JSFunctionInContext` instead of :py:class:`~.util.JSFunction`.
         """
         pass
 
@@ -164,15 +178,6 @@ class Select2Mixin(object):
             options['allowClear'] = not self.is_required
         return options
 
-    def render_select2_options_code(self, options, id_):
-        """
-        Renders options for Select2 JS.
-
-        :return: The rendered JS code.
-        :rtype: :py:obj:`unicode`
-        """
-        return convert_dict_to_js_map(options, id_)
-
     def render_js_code(self, id_, *args):
         """
         Renders the ``<script>`` block which contains the JS code for this widget.
@@ -181,8 +186,28 @@ class Select2Mixin(object):
         :rtype: :py:obj:`unicode`
         """
         if id_:
-            return render_js_script(self.render_inner_js_code(id_, *args))
-        return ''
+            return self.render_js_script(self.render_inner_js_code(id_, *args))
+        return u''
+
+    def render_js_script(self, inner_code):
+        """
+        This wraps ``inner_code`` string inside the following code block::
+
+            <script type="text/javascript">
+                jQuery(function ($) {
+                    // inner_code here
+                });
+            </script>
+
+        :rtype: :py:obj:`unicode`
+        """
+        return u"""
+                <script type="text/javascript">
+                    jQuery(function ($) {
+                        %s
+                    });
+                </script>
+                """ % inner_code
 
     def render_inner_js_code(self, id_, *args):
         """
@@ -191,14 +216,14 @@ class Select2Mixin(object):
         :return: The rendered JS code which will be later enclosed inside ``<script>`` block.
         :rtype: :py:obj:`unicode`
         """
-        options = dict(self.get_options())
-        options = self.render_select2_options_code(options, id_)
-
-        return '$("#%s").select2(%s);' % (id_, options)
+        options = json.dumps(self.get_options())
+        options = options.replace('"*START*', '').replace('*END*"', '')
+        # selector variable must already be passed to this
+        return u'$(hashedSelector).select2(%s);' % (options)
 
     def render(self, name, value, attrs=None, choices=()):
         """
-        Renders this widget. Html and JS code blocks all are rendered by this.
+        Renders this widget. HTML and JS code blocks all are rendered by this.
 
         :return: The rendered markup.
         :rtype: :py:obj:`unicode`
@@ -210,7 +235,7 @@ class Select2Mixin(object):
         if choices:
             args.append(choices)
 
-        s = str(super(Select2Mixin, self).render(*args))  # Thanks to @ouhouhsami Issue#1
+        s = unicode(super(Select2Mixin, self).render(*args))  # Thanks to @ouhouhsami Issue#1
         if RENDER_SELECT2_STATICS:
             s += self.media.render()
         final_attrs = self.build_attrs(attrs)
@@ -284,20 +309,17 @@ class MultipleSelect2HiddenInput(forms.TextInput):
     hidden input would be removed. This way, when submitted all the selected values
     would be available as list.
     """
-    # We want it hidden but should be treated as if is_hidden is False
-    input_type = 'hidden'
 
     def render(self, name, value, attrs=None, choices=()):
         attrs = self.build_attrs(attrs, multiple='multiple')
-        s = str(super(MultipleSelect2HiddenInput, self).render(name, "", attrs))
+        s = unicode(super(MultipleSelect2HiddenInput, self).render(name, u"", attrs))
         id_ = attrs.get('id', None)
         if id_:
-            jscode = ''
+            jscode = u''
             if value:
-                jscode = "$('#%s').val(django_select2.convertArrToStr(%s));" \
-                    % (id_, convert_to_js_arr(value, id_))
-            jscode += "django_select2.initMultipleHidden($('#%s'));" % id_
-            s += render_js_script(jscode)
+                jscode = u'$("#%s").val(django_select2.convertArrToStr(%s));' % (id_, json.dumps(value))
+            jscode += u"django_select2.initMultipleHidden($('#%s'));" % id_
+            s += self.render_js_script(jscode)
         return mark_safe(s)
 
     def value_from_datadict(self, data, files, name):
@@ -312,8 +334,8 @@ class MultipleSelect2HiddenInput(forms.TextInput):
             data = []
         if len(initial) != len(data):
             return True
-        initial_set = set([force_text(value) for value in initial])
-        data_set = set([force_text(value) for value in data])
+        initial_set = set([force_unicode(value) for value in initial])
+        data_set = set([force_unicode(value) for value in data])
         return data_set != initial_set
 
 ### Heavy mixins and widgets ###
@@ -325,12 +347,12 @@ class HeavySelect2Mixin(Select2Mixin):
     This mixin adds more Select2 options to :py:attr:`.Select2Mixin.options`. These are:-
 
         * minimumInputLength: ``2``
-        * initSelection: ``JSFunction('django_select2.onInit')``
+        * initSelection: ``'django_select2.onInit'``
         * ajax:
             * dataType: ``'json'``
             * quietMillis: ``100``
-            * data: ``JSFunctionInContext('django_select2.get_url_params')``
-            * results: ``JSFunctionInContext('django_select2.process_results')``
+            * data: ``'django_select2.get_url_params'``
+            * results: ``'django_select2.process_results'``
 
     .. tip:: You can override these options by passing ``select2_options`` kwarg to :py:meth:`.__init__`.
     """
@@ -382,7 +404,7 @@ class HeavySelect2Mixin(Select2Mixin):
         self.options = dict(self.options)  # Making an instance specific copy
         self.view = kwargs.pop('data_view', None)
         self.url = kwargs.pop('data_url', None)
-        self.userGetValTextFuncName = kwargs.pop('userGetValTextFuncName', 'null')
+        self.userGetValTextFuncName = kwargs.pop('userGetValTextFuncName', u'null')
         self.choices = kwargs.pop('choices', [])
 
         if not self.view and not self.url:
@@ -391,11 +413,11 @@ class HeavySelect2Mixin(Select2Mixin):
         self.options['ajax'] = {
             'dataType': 'json',
             'quietMillis': 100,
-            'data': JSFunctionInContext('django_select2.get_url_params'),
-            'results': JSFunctionInContext('django_select2.process_results'),
+            'data': '*START*django_select2.runInContextHelper(django_select2.get_url_params, selector)*END*',
+            'results': '*START*django_select2.runInContextHelper(django_select2.process_results, selector)*END*',
         }
         self.options['minimumInputLength'] = 2
-        self.options['initSelection'] = JSFunction('django_select2.onInit')
+        self.options['initSelection'] = '*START*django_select2.onInit*END*'
         super(HeavySelect2Mixin, self).__init__(**kwargs)
 
     def render_texts(self, selected_choices, choices):
@@ -412,18 +434,18 @@ class HeavySelect2Mixin(Select2Mixin):
         :return: The rendered JS array code.
         :rtype: :py:obj:`unicode`
         """
-        selected_choices = list(force_text(v) for v in selected_choices)
+        selected_choices = list(force_unicode(v) for v in selected_choices)
         txts = []
         all_choices = choices if choices else []
         choices_dict = dict()
         self_choices = self.choices
 
-        from . import fields
+        import fields
         if isinstance(self_choices, fields.FilterableModelChoiceIterator):
             self_choices.set_extra_filter(**{'%s__in' % self.field.get_pk_field_name(): selected_choices})
 
         for val, txt in chain(self_choices, all_choices):
-            val = force_text(val)
+            val = force_unicode(val)
             choices_dict[val] = txt
 
         for val in selected_choices:
@@ -438,7 +460,7 @@ class HeavySelect2Mixin(Select2Mixin):
                 if txt is not None:
                     txts.append(txt)
         if txts:
-            return convert_to_js_string_arr(txts)
+            return json.dumps(txts)
 
     def get_options(self):
         if self.url is None:
@@ -468,16 +490,16 @@ class HeavySelect2Mixin(Select2Mixin):
         :return: JS code which sets the ``txt`` attribute.
         :rtype: :py:obj:`unicode`
         """
-        if value is not None:
+        empty_values = getattr(self.field, 'empty_values', EMPTY_VALUES)
+        if value is not None and (self.field is None or value not in empty_values):
             # Just like forms.Select.render() it assumes that value will be single valued.
             values = [value]
             texts = self.render_texts(values, choices)
             if texts:
-                return "$('#%s').txt(%s);" % (id_, texts)
+                return u"$('#%s').txt(%s);" % (id_, texts)
 
     def render_inner_js_code(self, id_, name, value, attrs=None, choices=(), *args):
-        js = "$('#%s').change(django_select2.onValChange).data('userGetValText', %s);" \
-            % (id_, self.userGetValTextFuncName)
+        js = u'$(hashedSelector).change(django_select2.onValChange).data("userGetValText", null);'
         texts = self.render_texts_for_value(id_, value, choices)
         if texts:
             js += texts
@@ -498,8 +520,6 @@ class HeavySelect2Widget(HeavySelect2Mixin, forms.TextInput):
         * multiple: ``False``
 
     """
-    # We want it hidden but should be treated as if is_hidden is False
-    input_type = 'hidden'
 
     def init_options(self):
         self.options['multiple'] = False
@@ -517,7 +537,7 @@ class HeavySelect2MultipleWidget(HeavySelect2Mixin, MultipleSelect2HiddenInput):
     Following Select2 options from :py:attr:`.Select2Mixin.options` are added or set:-
 
         * multiple: ``True``
-        * separator: ``JSVar('django_select2.MULTISEPARATOR')``
+        * separator: ``django_select2.MULTISEPARATOR``
 
     """
 
@@ -525,7 +545,7 @@ class HeavySelect2MultipleWidget(HeavySelect2Mixin, MultipleSelect2HiddenInput):
         self.options['multiple'] = True
         self.options.pop('allowClear', None)
         self.options.pop('minimumResultsForSearch', None)
-        self.options['separator'] = JSVar('django_select2.MULTISEPARATOR')
+        self.options['separator'] = '*START*django_select2.MULTISEPARATOR*END*'
 
     def render_texts_for_value(self, id_, value, choices):
         """
@@ -549,7 +569,8 @@ class HeavySelect2MultipleWidget(HeavySelect2Mixin, MultipleSelect2HiddenInput):
         if value:
             texts = self.render_texts(value, choices)
             if texts:
-                return "$('#%s').txt(%s);" % (id_, texts)
+                return u'$("#%s").txt(%s);' % (id_, texts)
+
 
 class HeavySelect2TagWidget(HeavySelect2MultipleWidget):
     """
@@ -565,10 +586,10 @@ class HeavySelect2TagWidget(HeavySelect2MultipleWidget):
     Following Select2 options from :py:attr:`.Select2Mixin.options` are added or set:-
 
         * multiple: ``True``
-        * separator: ``JSVar('django_select2.MULTISEPARATOR')``
+        * separator: ``django_select2.MULTISEPARATOR``
         * tags: ``True``
         * tokenSeparators: ``,`` and `` ``
-        * createSearchChoice: ``JSFunctionInContext('django_select2.createSearchChoice')``
+        * createSearchChoice: ``django_select2.createSearchChoice``
         * minimumInputLength: ``1``
 
     """
@@ -578,7 +599,8 @@ class HeavySelect2TagWidget(HeavySelect2MultipleWidget):
         self.options['minimumInputLength'] = 1
         self.options['tags'] = True
         self.options['tokenSeparators'] = [",", " "]
-        self.options['createSearchChoice'] = JSFunctionInContext('django_select2.createSearchChoice')
+        self.options['createSearchChoice'] = '*START*django_select2.createSearchChoice*END*'
+
 
 ### Auto Heavy widgets ###
 
@@ -586,11 +608,20 @@ class AutoHeavySelect2Mixin(object):
     """
     This mixin is needed for Auto heavy fields.
 
-    This mxin adds extra JS code to notify the field's DOM object of the generated id. The generated id
-    is not the same as the ``id`` attribute of the field's Html markup. This id is generated by
+    This mixin adds extra JS code to notify the field's DOM object of the generated id. The generated id
+    is not the same as the ``id`` attribute of the field's HTML markup. This id is generated by
     :py:func:`~.util.register_field` when the Auto field is registered. The client side (DOM) sends this
     id along with the Ajax request, so that the central view can identify which field should be used to
     serve the request.
+
+    The js call to dynamically add the `django_select2` is as follows::
+
+        django_select2.id_cities('id_cities', django_select2.id_cities_field_id);
+
+    For an inline formset::
+
+        django_select2.id_musician_set_name(
+            'id_musician_set-0-name', django_select2.id_musician_set_name_field_id);
     """
 
     def __init__(self, *args, **kwargs):
@@ -598,9 +629,19 @@ class AutoHeavySelect2Mixin(object):
         super(AutoHeavySelect2Mixin, self).__init__(*args, **kwargs)
 
     def render_inner_js_code(self, id_, *args):
-        js = "$('#%s').data('field_id', '%s');" % (id_, self.field_id)
-        js += super(AutoHeavySelect2Mixin, self).render_inner_js_code(id_, *args)
-        return js
+        fieldset_id = re.sub(r'-\d+-', '_', id_).replace('-', '_')
+        if '__prefix__' in id_:
+            return ''
+        else:
+            js = u'''
+                  window.django_select2.%s = function (selector, fieldID) {
+                    var hashedSelector = "#" + selector;
+                    $(hashedSelector).data("field_id", fieldID);
+                  ''' % (fieldset_id)
+            js += super(AutoHeavySelect2Mixin, self).render_inner_js_code(id_, *args)
+            js += '};'
+            js += 'django_select2.%s("%s", "%s");' % (fieldset_id, id_, self.field_id)
+            return js
 
 
 class AutoHeavySelect2Widget(AutoHeavySelect2Mixin, HeavySelect2Widget):
